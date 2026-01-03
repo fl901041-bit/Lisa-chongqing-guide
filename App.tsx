@@ -6,7 +6,7 @@ import { GoogleGenAI } from "@google/genai";
 const CONFIG = {
   name: "Lisa",
   chineseName: "莉莎",
-  wechat: "Lisa_CQ_Guide",
+  wechat: "FZcday",
   heroImg: "https://images.unsplash.com/photo-1540648639573-8c848de23f0a?auto=format&fit=crop&q=90&w=2400",
   introImg: "https://images.unsplash.com/photo-1536599018102-9f803c140fc1?auto=format&fit=crop&q=80&w=1000",
   qrCodeUrl: "https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=WECHAT_ID:Lisa_CQ_Guide",
