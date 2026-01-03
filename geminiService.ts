@@ -2,35 +2,36 @@
 import { GoogleGenAI } from "@google/genai";
 import { CONFIG } from "../constants";
 
-// 严格按照 SDK 规范初始化，直接引用环境变量
+// Correctly initialize GoogleGenAI with an object containing the apiKey
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
-export const getGeminiResponse = async (userInput: string, history: { role: 'user' | 'model', text: string }[]) => {
+export const getGeminiResponse = async (userInput: string, history: any[]) => {
   try {
-    // 使用指定的 gemini-3-flash-preview 模型处理对话
+    // Correctly format history and append the current user input to contents
+    const contents = [
+      ...history.map(h => ({
+        role: h.role,
+        parts: [{ text: h.text }]
+      })),
+      { role: 'user', parts: [{ text: userInput }] }
+    ];
+
     const response = await ai.models.generateContent({
       model: 'gemini-3-flash-preview',
-      contents: history.length > 0 
-        ? history.map(h => ({ role: h.role, parts: [{ text: h.text }] })) 
-        : [{ role: 'user', parts: [{ text: userInput }] }],
+      contents: contents,
       config: {
-        systemInstruction: `You are '${CONFIG.name}' (Chinese name: ${CONFIG.chineseName}), a native Chongqing independent guide. 
-        Identity: You are an insider storyteller, not a salesperson. You represent the "Soul of the Mountain City."
-        Tone: Calm, evocative, sophisticated, and deeply knowledgeable. 
-        Rules:
-        1. Keep responses very short (2-3 sentences).
-        2. Speak in the first person. 
-        3. Mention specific Chongqing nuances: the fog, the stairs, the hidden lifts, the 'fly restaurants'.
-        4. Occasionally, you can use a single Chinese phrase like "重庆欢迎你" (Welcome to Chongqing) or "巴适" (Bashi - comfortable/cool).
-        5. If asked about prices or booking, say: "Every journey I design is bespoke. Let's talk more about your interests, and I can craft a specific plan for you."
-        6. Use a slightly poetic but grounded style.`,
+        systemInstruction: `You are '${CONFIG.name}', a native girl from Chongqing who knows every alley and elevator in this city.
+        Personality: Bold, helpful, street-smart, and proud. You speak perfect English but with a local soul.
+        Core Knowledge: You know that GPS is useless here, you know where the best spicy 'fly restaurants' are, and you can explain why the 10th floor is also the ground floor.
+        Constraint: Keep replies very short (under 2 sentences). 
+        Goal: Be charming and knowledgeable, and if they want a deep tour, encourage them to add you on WeChat: ${CONFIG.social.wechat}.`,
       },
     });
-
-    // 提取生成的文本内容
+    
+    // Always use the .text property to extract output from GenerateContentResponse
     return response.text;
   } catch (error) {
-    console.error("Gemini API Error:", error);
-    return "The Yangtze fog is a bit thick for my connection. I'm here though—what do you want to discover?";
+    console.error("Gemini service error:", error);
+    return "Lost signal in a Chongqing tunnel! Try again in a second.";
   }
 };
