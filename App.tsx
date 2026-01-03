@@ -1,171 +1,230 @@
 
-import React, { useState, useRef, useEffect } from 'react';
-import { GoogleGenAI } from "@google/genai";
+import React, { useState, useEffect, useRef } from 'react';
+import { Category, ChatMessage, Location, GroundingChunk } from './types';
+import { getGeminiResponse, getCategoryRecommendations } from './services/geminiService';
+import GroundingLink from './components/GroundingLink';
 
-// --- 核心配置 ---
+// ============================================================
+// 💡 莉莎，你只需要修改这里的配置：
+// ============================================================
 const CONFIG = {
-  name: "Lisa",
-  chineseName: "莉莎",
-  wechat: "FZcday", // 确认这里是你真实的微信号
-  heroImg: "https://images.unsplash.com/photo-1540648639573-8c848de23f0a?auto=format&fit=crop&q=90&w=2400",
-  introImg: "https://images.unsplash.com/photo-1536599018102-9f803c140fc1?auto=format&fit=crop&q=80&w=1000",
-  qrCodeUrl: `https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=WECHAT_ID:Lisa_CQ_Guide`,
+  // 1. 顶部图片链接：你可以去网上找一张喜欢的图，把链接粘贴在这里
+  heroImage: "https://images.unsplash.com/photo-1540648639573-8c848de23f0a?auto=format&fit=crop&q=80&w=2400",
+  
+  // 2. 网页的大标题
+  title: "莉莎的重庆 AI 导游",
+  
+  // 3. 网页的副标题
+  subtitle: "由人工智能驱动，带你探索 8D 魔幻山城的每一个角落。",
+  
+  // 4. 你的微信 ID (如果不想要，可以留空 "")
+  wechat: "FZcday"
 };
 
-// --- AI 逻辑 ---
-const getGeminiResponse = async (userInput: string, history: any[]) => {
-  try {
-    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || "" });
-    const contents = [
-      ...history.map(h => ({ role: h.role, parts: [{ text: h.text }] })),
-      { role: 'user', parts: [{ text: userInput }] }
-    ];
-    const response = await ai.models.generateContent({
-      model: 'gemini-3-flash-preview',
-      contents: contents,
-      config: {
-        systemInstruction: `You are 'Lisa', a bold, spicy, and street-smart Chongqing native girl. 
-        Context: You are chatting with a foreign traveler in a local coffee shop.
-        Personality: Direct, slightly sassy, but very caring. You hate tourist traps.
-        Knowledge: You know GPS is useless here. You suggest hidden spots, not crowded ones.
-        Rules: 
-        1. Max 2 sentences. English only.
-        2. Be spicy! Use phrases like "Trust me" or "Listen".
-        3. If they want a tour, say: "Add my WeChat: ${CONFIG.wechat}, let's talk real business."`,
-      },
-    });
-    return response.text;
-  } catch (e) { 
-    console.error(e);
-    return "Foggy signal in the tunnel... try again?"; 
-  }
-};
+const CHONGQING_COORDS = { lat: 29.5628, lng: 106.5528 };
 
-// --- 聊天组件 ---
-const ChatWidget = ({ onClose }: { onClose: () => void }) => {
-  const [messages, setMessages] = useState([{ role: 'model', text: "Listen, if you're following Google Maps here, you're already lost. Want to find the real Chongqing soul?" }]);
+const App: React.FC = () => {
+  const [messages, setMessages] = useState<ChatMessage[]>([
+    { role: 'model', content: "你好！我是你的重庆本地 AI 导游。不管是火锅推荐、交通路线还是打卡点建议，我都能帮你！你想去哪里逛逛？" }
+  ]);
   const [input, setInput] = useState('');
-  const [isTyping, setIsTyping] = useState(false);
-  const scrollRef = useRef<HTMLDivElement>(null);
+  const [loading, setLoading] = useState(false);
+  const [userLocation, setUserLocation] = useState<Location | undefined>();
+  const [activeCategory, setActiveCategory] = useState<Category | null>(null);
+  
+  const chatEndRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => { scrollRef.current?.scrollTo(0, scrollRef.current.scrollHeight); }, [messages]);
+  useEffect(() => {
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        (pos) => setUserLocation({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
+        () => setUserLocation(CHONGQING_COORDS)
+      );
+    }
+  }, []);
 
-  const handleSend = async (text?: string) => {
-    const userMsg = text || input;
-    if (!userMsg.trim() || isTyping) return;
-    setMessages(prev => [...prev, { role: 'user', text: userMsg }]);
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages]);
+
+  const handleSend = async (e?: React.FormEvent) => {
+    e?.preventDefault();
+    if (!input.trim() || loading) return;
+
+    const userMsg = input;
     setInput('');
-    setIsTyping(true);
-    const res = await getGeminiResponse(userMsg, messages);
-    setMessages(prev => [...prev, { role: 'model', text: res || "..." }]);
-    setIsTyping(false);
+    setMessages(prev => [...prev, { role: 'user', content: userMsg }]);
+    setLoading(true);
+
+    try {
+      const response = await getGeminiResponse(userMsg, userLocation);
+      setMessages(prev => [...prev, { 
+        role: 'model', 
+        content: response.text, 
+        groundingSources: response.grounding as GroundingChunk[] 
+      }]);
+    } catch (error) {
+      console.error(error);
+      setMessages(prev => [...prev, { role: 'model', content: "抱歉，刚刚信号有点雾，请再跟我说一遍？" }]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleCategoryClick = async (category: Category) => {
+    setActiveCategory(category);
+    setLoading(true);
+    const categoryName = category === Category.HOTPOT ? "火锅" : 
+                        category === Category.SCENERY ? "风景" : 
+                        category === Category.STREET_FOOD ? "小吃" : 
+                        category === Category.CULTURE ? "文化" : "夜生活";
+    
+    setMessages(prev => [...prev, { role: 'user', content: `给我推荐一些重庆的${categoryName}好去处。` }]);
+    
+    try {
+      const response = await getCategoryRecommendations(category, userLocation);
+      setMessages(prev => [...prev, { 
+        role: 'model', 
+        content: response.text, 
+        groundingSources: response.grounding as GroundingChunk[]
+      }]);
+    } catch (error) {
+      console.error(error);
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
-    <div className="fixed inset-0 z-[100] bg-black/95 backdrop-blur-xl flex items-end md:items-center justify-center p-0 md:p-6 transition-all duration-500">
-      <div className="w-full max-w-lg bg-[#fcfaf7] h-[90vh] md:h-[650px] flex flex-col md:rounded-3xl overflow-hidden shadow-2xl border border-white/10 animate-reveal">
-        <div className="p-6 border-b border-stone-200 flex justify-between items-center bg-white">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-black text-white rounded-full flex items-center justify-center font-serif italic">L</div>
-            <div>
-              <p className="font-black text-[10px] uppercase tracking-widest leading-none">Lisa | Native Insider</p>
-              <p className="text-[8px] text-green-600 font-bold uppercase tracking-tighter mt-1 animate-pulse">● Online & Ready</p>
+    <div className="min-h-screen bg-gray-50 flex flex-col">
+      {/* 顶部区域 */}
+      <header className="relative h-64 md:h-80 w-full overflow-hidden shadow-xl">
+        <img 
+          src={CONFIG.heroImage} 
+          alt="Chongqing" 
+          className="w-full h-full object-cover brightness-75"
+          onError={(e) => {
+            (e.target as HTMLImageElement).src = "https://images.unsplash.com/photo-1540648639573-8c848de23f0a?auto=format&fit=crop&q=80&w=2400";
+          }}
+        />
+        <div className="absolute inset-0 bg-gradient-to-t from-black/80 to-transparent flex flex-col justify-end p-6 pb-10 text-center md:text-left">
+          <h1 className="text-4xl md:text-5xl font-bold text-white mb-2 drop-shadow-lg">{CONFIG.title}</h1>
+          <p className="text-gray-200 text-lg max-w-2xl font-light">{CONFIG.subtitle}</p>
+        </div>
+      </header>
+
+      {/* 主体区域 */}
+      <main className="max-w-6xl mx-auto w-full flex flex-col md:flex-row flex-grow p-4 gap-6">
+        
+        {/* 左侧：快捷分类 */}
+        <section className="md:w-1/3 flex flex-col gap-4">
+          <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
+            <h2 className="text-xl font-bold mb-4 flex items-center">
+              <span className="mr-2 text-red-600">🗺️</span> 快速探索
+            </h2>
+            <div className="grid grid-cols-1 gap-3">
+              {[
+                { type: Category.HOTPOT, icon: '🥘', label: '正宗火锅' },
+                { type: Category.SCENERY, icon: '⛰️', label: '绝美风景' },
+                { type: Category.STREET_FOOD, icon: '🍜', label: '街头小吃' },
+                { type: Category.CULTURE, icon: '🎭', label: '文化体验' },
+                { type: Category.NIGHTLIFE, icon: '🏮', label: '夜色重庆' },
+              ].map((item) => (
+                <button
+                  key={item.type}
+                  onClick={() => handleCategoryClick(item.type)}
+                  disabled={loading}
+                  className={`flex items-center p-4 rounded-xl text-left transition-all border-2 ${
+                    activeCategory === item.type 
+                      ? 'border-red-500 bg-red-50 text-red-700 shadow-md translate-x-1' 
+                      : 'border-transparent bg-gray-50 hover:bg-gray-100 text-gray-700 hover:border-gray-200'
+                  }`}
+                >
+                  <span className="text-2xl mr-3">{item.icon}</span>
+                  <div className="flex flex-col">
+                    <span className="font-semibold text-sm tracking-wide">{item.label}</span>
+                  </div>
+                </button>
+              ))}
             </div>
           </div>
-          <button onClick={onClose} className="p-2 hover:bg-stone-100 rounded-full">✕</button>
-        </div>
-        
-        <div ref={scrollRef} className="flex-1 overflow-y-auto p-6 space-y-6">
-          {messages.map((m, i) => (
-            <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-              <div className={`max-w-[85%] p-4 rounded-2xl text-[15px] leading-relaxed ${
-                m.role === 'user' ? 'bg-black text-white rounded-tr-none' : 'bg-stone-100 italic text-stone-800'
-              }`}>
-                {m.text}
+
+          <div className="bg-red-600 rounded-2xl shadow-lg p-6 text-white relative">
+            <h3 className="font-bold text-lg mb-1 italic">"8D 城市" 趣闻</h3>
+            <p className="text-sm opacity-90 leading-relaxed">
+              在重庆，导航说“请直行”，你可能得先坐电梯。虽然路难找，但我会一直为你指引。
+            </p>
+            {CONFIG.wechat && (
+              <div className="mt-4 pt-4 border-t border-white/20 text-xs font-bold">
+                联系作者微信: {CONFIG.wechat}
+              </div>
+            )}
+          </div>
+        </section>
+
+        {/* 右侧：聊天窗口 */}
+        <section className="md:w-2/3 flex flex-col h-[600px] md:h-[750px] bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+          <div className="bg-gray-50 px-6 py-4 border-b border-gray-100 flex items-center gap-3">
+            <div className="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center text-red-600 font-bold">CQ</div>
+            <div>
+              <h3 className="font-bold text-gray-800">重庆 AI 助手</h3>
+              <div className="flex items-center text-xs text-green-500 font-medium">
+                <span className="w-1.5 h-1.5 bg-green-500 rounded-full mr-1.5 animate-pulse"></span>
+                在线
               </div>
             </div>
-          ))}
-          {isTyping && <div className="text-[9px] tracking-[0.3em] animate-pulse text-stone-400 uppercase">Lisa is typing...</div>}
-        </div>
+          </div>
 
-        <div className="p-6 bg-white border-t border-stone-100">
-          <div className="flex flex-wrap gap-2 mb-4">
-            {["Best local food?", "Hidden rooftops?", "Book a tour?"].map((p, i) => (
-              <button key={i} onClick={() => handleSend(p)} className="text-[9px] border border-stone-200 px-3 py-1.5 rounded-full hover:bg-black hover:text-white transition-all uppercase font-bold">
-                {p}
-              </button>
+          <div className="flex-grow overflow-y-auto p-6 space-y-6 bg-slate-50/50">
+            {messages.map((msg, idx) => (
+              <div key={idx} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                <div className={`max-w-[85%] rounded-2xl p-4 shadow-sm ${msg.role === 'user' ? 'bg-red-600 text-white rounded-tr-none' : 'bg-white text-gray-800 border border-gray-100 rounded-tl-none'}`}>
+                  <p className="whitespace-pre-wrap leading-relaxed text-sm">{msg.content}</p>
+                  {msg.groundingSources && <GroundingLink sources={msg.groundingSources} />}
+                </div>
+              </div>
             ))}
+            {loading && (
+              <div className="flex justify-start">
+                <div className="bg-gray-100 rounded-2xl px-4 py-2 flex gap-1">
+                  <div className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce"></div>
+                  <div className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce delay-100"></div>
+                  <div className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce delay-200"></div>
+                </div>
+              </div>
+            )}
+            <div ref={chatEndRef} />
           </div>
-          <div className="flex gap-3 bg-stone-50 p-2 rounded-full border border-stone-200">
-            <input value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleSend()} className="flex-1 bg-transparent px-4 py-2 text-sm focus:outline-none" placeholder="Ask Lisa..." />
-            <button onClick={() => handleSend()} className="bg-black text-white w-10 h-10 rounded-full flex items-center justify-center hover:bg-yellow-400">
-              <svg width="16" height="16" fill="currentColor" viewBox="0 0 24 24"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
-            </button>
+
+          <div className="p-4 bg-white border-t border-gray-100">
+            <form onSubmit={handleSend} className="relative flex items-center gap-2">
+              <input 
+                type="text" 
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                placeholder="问问我这里的餐厅、路线或打卡点..."
+                className="flex-grow p-4 pr-14 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-red-500 focus:border-transparent transition-all"
+                disabled={loading}
+              />
+              <button 
+                type="submit"
+                disabled={!input.trim() || loading}
+                className="absolute right-2 p-2 rounded-lg bg-red-600 text-white hover:bg-red-700 disabled:opacity-50 transition-colors"
+              >
+                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 5l7 7m0 0l-7 7m7-7H3" />
+                </svg>
+              </button>
+            </form>
           </div>
-        </div>
-      </div>
+        </section>
+      </main>
+
+      <footer className="bg-gray-900 text-gray-400 py-8 px-4 text-center">
+        <p className="text-xs">© 2024 重庆探索者 | 本网页由 Gemini AI 提供支持</p>
+      </footer>
     </div>
   );
 };
 
-// --- 主页面 ---
-export default function App() {
-  const [isChatOpen, setIsChatOpen] = useState(false);
-
-  return (
-    <div className="bg-[#0a0a0a] min-h-screen text-white font-sans selection:bg-yellow-400 selection:text-black">
-      <nav className="fixed top-0 w-full z-50 p-8 flex justify-between items-center mix-blend-difference">
-        <div className="flex flex-col">
-          <span className="font-black tracking-[0.5em] uppercase text-xl">LISA</span>
-          <span className="text-[8px] tracking-[0.3em] uppercase opacity-50 italic">Chongqing native</span>
-        </div>
-        <button onClick={() => setIsChatOpen(true)} className="bg-white text-black px-8 py-3 text-[10px] font-black tracking-[0.4em] uppercase hover:bg-yellow-400 transition-all">
-          Consult
-        </button>
-      </nav>
-
-      <header className="relative h-screen flex flex-col justify-end p-8 overflow-hidden">
-        <img src={CONFIG.heroImg} className="absolute inset-0 w-full h-full object-cover opacity-30 grayscale scale-110" alt="CQ" />
-        <div className="absolute inset-0 bg-gradient-to-t from-black via-transparent to-transparent"></div>
-        <div className="relative z-10 max-w-5xl animate-reveal">
-          <h1 className="text-[16vw] md:text-[11vw] serif italic leading-[0.85] mb-10 tracking-tighter">
-            Your GPS is<br /><span className="text-white/20">Lying To You.</span>
-          </h1>
-          <div className="flex flex-col md:flex-row md:items-end gap-12">
-            <p className="max-w-md text-sm text-white/60 italic leading-relaxed border-l border-white/10 pl-8">
-              "In a city where the ground floor is on the 22nd story, maps are useless. I'll be your human compass."
-            </p>
-            <button onClick={() => setIsChatOpen(true)} className="bg-yellow-400 text-black px-10 py-6 text-[11px] font-black tracking-[0.4em] uppercase hover:scale-105 transition-all shadow-xl">
-              Start Conversation
-            </button>
-          </div>
-        </div>
-      </header>
-
-      <section className="bg-white text-black py-40 px-8">
-        <div className="max-w-6xl mx-auto grid grid-cols-1 lg:grid-cols-2 gap-24 items-center">
-          <img src={CONFIG.introImg} className="w-full grayscale shadow-2xl" alt="Lisa" />
-          <div>
-            <h2 className="text-6xl md:text-7xl serif italic mb-12 tracking-tight">Real Flavor.<br />Zero Traps.</h2>
-            <p className="text-stone-500 text-lg mb-12 italic leading-relaxed">
-              Skip the TikTok crowds. I'll take you to the basement noodle shops where soul meets spice.
-            </p>
-            <div className="p-10 border-2 border-stone-100 bg-stone-50 flex flex-col items-center text-center rounded-2xl">
-              <img src={CONFIG.qrCodeUrl} className="w-48 h-48 mix-blend-multiply grayscale mb-6" alt="QR" />
-              <p className="text-[10px] tracking-[0.5em] font-black uppercase">Scan to Book Lisa</p>
-              <p className="text-[9px] text-stone-400 mt-2 uppercase">ID: {CONFIG.wechat}</p>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      {!isChatOpen && (
-        <button onClick={() => setIsChatOpen(true)} className="fixed bottom-10 right-10 w-20 h-20 bg-white text-black rounded-full shadow-2xl flex items-center justify-center hover:scale-110 hover:bg-yellow-400 transition-all z-50">
-          <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z"></path></svg>
-        </button>
-      )}
-
-      {isChatOpen && <ChatWidget onClose={() => setIsChatOpen(false)} />}
-    </div>
-  );
-}
+export default App;
